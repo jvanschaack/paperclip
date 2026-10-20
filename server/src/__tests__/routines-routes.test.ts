@@ -630,6 +630,62 @@ describe("routine routes", () => {
     expect(mockRoutineService.runRoutine).not.toHaveBeenCalled();
   });
 
+  it("rejects agent callers that attach host-executed workspace commands to a manual run", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+    });
+
+    const res = await request(app)
+      .post(`/api/routines/${routineId}/run`)
+      .send({
+        executionWorkspaceSettings: {
+          workspaceStrategy: {
+            type: "git_worktree",
+            provisionCommand: "echo provision",
+          },
+        },
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("executionWorkspaceSettings.workspaceStrategy.provisionCommand");
+    expect(mockRoutineService.runRoutine).not.toHaveBeenCalled();
+  });
+
+  it("lets board users attach workspace commands to a manual run", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/routines/${routineId}/run`)
+      .send({
+        executionWorkspaceSettings: {
+          workspaceStrategy: {
+            type: "git_worktree",
+            provisionCommand: "echo provision",
+          },
+        },
+      });
+
+    expect(res.status).toBe(202);
+    expect(mockRoutineService.runRoutine).toHaveBeenCalledWith(
+      routineId,
+      expect.objectContaining({
+        executionWorkspaceSettings: {
+          workspaceStrategy: { type: "git_worktree", provisionCommand: "echo provision" },
+        },
+      }),
+      { agentId: null, userId: "board-user" },
+    );
+  });
+
   it("passes the board actor through when manually running a routine", async () => {
     mockAccessService.canUser.mockResolvedValue(true);
     const app = await createApp({

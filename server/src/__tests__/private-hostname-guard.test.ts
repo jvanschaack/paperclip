@@ -42,6 +42,26 @@ describe("privateHostnameGuard", () => {
     expect(res.status).toBe(200);
   });
 
+  it("ignores x-forwarded-host from an untrusted direct client", async () => {
+    const app = createApp({ enabled: true, allowedHostnames: ["some-other-host"] });
+    const res = await request(app)
+      .get("/api/health")
+      .set("Host", `${unknownHostname}:3100`)
+      .set("X-Forwarded-Host", "localhost:3100");
+    expect(res.status).toBe(403);
+  });
+
+  it("honors x-forwarded-host from a trusted proxy", async () => {
+    const app = createApp({ enabled: true, allowedHostnames: ["some-other-host"] });
+    // supertest connects from loopback, which this setting marks as trusted.
+    app.set("trust proxy", "loopback");
+    const res = await request(app)
+      .get("/api/health")
+      .set("Host", `${unknownHostname}:3100`)
+      .set("X-Forwarded-Host", "some-other-host:3100");
+    expect(res.status).toBe(200);
+  });
+
   it("blocks unknown hostnames with a static remediation command", async () => {
     const app = createApp({ enabled: true, allowedHostnames: ["some-other-host"] });
     const res = await request(app).get("/api/health").set("Host", `${unknownHostname}:3100`);

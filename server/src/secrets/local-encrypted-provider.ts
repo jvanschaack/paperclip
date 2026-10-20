@@ -217,7 +217,10 @@ function decryptValue(masterKey: Buffer, material: LocalEncryptedMaterial): stri
   const iv = Buffer.from(material.iv, "base64");
   const tag = Buffer.from(material.tag, "base64");
   const ciphertext = Buffer.from(material.ciphertext, "base64");
-  const decipher = createDecipheriv("aes-256-gcm", masterKey, iv);
+  // Every tag this provider writes is the full 16-byte GCM tag. Pin the
+  // expected length so a truncated tag in stored material is rejected
+  // instead of accepted with reduced forgery resistance.
+  const decipher = createDecipheriv("aes-256-gcm", masterKey, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
   try {
     const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
