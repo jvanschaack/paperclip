@@ -20,17 +20,17 @@ The real risk sits at the two places where the product's own trust model is thin
 | Severity | Count | Fixed on the branch |
 |---|---|---|
 | Critical | 0 | 0 |
-| High | 3 | 2 |
+| High | 3 | 3 |
 | Medium | 13 | 1 partial |
 | Low | 22 | 3 |
 | Informational | 12 | 2 |
-| **Total** | **50** | **8** |
+| **Total** | **50** | **9** |
 
 ### Top three risks
 
 1. **An agent API key could run arbitrary shell on the Paperclip host (H-02).** `POST /api/routines/:id/run` accepted `executionWorkspaceSettings.workspaceStrategy.provisionCommand` from agent callers, bypassing the guard that issues, projects, and agents already apply. A prompt-injected agent only needs a routine assigned to itself. **Fixed on the branch.**
 2. **DNS rebinding could take over a `local_trusted` instance (H-01).** The private-hostname guard, the only cross-site defense in local mode, trusted a client-supplied `X-Forwarded-Host` header. A malicious web page could then drive the implicit instance-admin API. **Fixed on the branch.**
-3. **Agents can widen their own blast radius without a human (M-02, M-03, H-03).** By default a CEO-role agent can rewrite a peer agent's trust preset, any standard agent can create new active agents, and skill import performs an unguarded server-side fetch of any URL including the cloud metadata endpoint. These are behavior-changing fixes and are described, not applied.
+3. **Server-side request forgery through skill import (H-03) and agents widening their own blast radius (M-02, M-03).** Skill import fetched any URL, including the cloud metadata endpoint, and stored the response where the caller can read it. **H-03 is fixed on branch `security/skill-import-ssrf`.** By default a CEO-role agent can still rewrite a peer agent's trust preset and any standard agent can still create new active agents; those are behavior-changing fixes and are described, not applied.
 
 Secondary: the dependency tree carries 56 advisories (1 critical, 21 high), nearly all transitive and almost all resolvable by a lockfile-only `pnpm update` within the existing semver ranges (M-13).
 
@@ -76,7 +76,7 @@ Ordered by severity. "Applied" means the fix is committed on `security/assessmen
 |---|---|---|---|---|
 | H-01 | High | Private-hostname guard trusts client-supplied `X-Forwarded-Host` (DNS-rebinding bypass of `local_trusted`) | `server/src/middleware/private-hostname-guard.ts:8-19` | Yes |
 | H-02 | High | Agent API key can set host-executed workspace commands through `POST /routines/:id/run` | `server/src/routes/routines.ts:629-640` | Yes |
-| H-03 | High | SSRF with response read-back via skill import (`ghFetch` bypasses the SSRF guard) | `server/src/services/github-fetch.ts:19-25`, `company-skills.ts:1732` | No |
+| H-03 | High | SSRF with response read-back via skill import (`ghFetch` bypasses the SSRF guard) | `server/src/services/github-fetch.ts:19-25`, `company-skills.ts:1732` | Yes (branch `security/skill-import-ssrf`) |
 | M-01 | Medium | Member role update does not bound the new role by the actor's rank; grants written unfiltered | `server/src/routes/access.ts:4471-4530` | No |
 | M-02 | Medium | CEO-role agent can rewrite any same-company agent's trust preset and permissions | `server/src/routes/agents.ts:4799-4815` | No |
 | M-03 | Medium | Standard agents create immediately active agents by default (no board approval) | `server/src/routes/agents.ts:4614-4631`, `packages/db/src/schema/companies.ts:19-21` | No |
@@ -172,7 +172,7 @@ Ordered by severity. "Applied" means the fix is committed on `security/assessmen
   ```
   Contrast the hardened path `server/src/services/remote-http-fetch.ts` (DNS pinned, link-local always denied, `redirect: "manual"`), used by remote MCP, webhooks, plugin HTTP, and GitHub attachments.
 - **Fix:** Implement `ghFetch` on top of `guardedRemoteHttpFetch(parseRemoteHttpEndpoint(url, err), init, { allowPrivateNetwork: false, error: err })`, re-guard each redirect hop (max 3), and require `https:` for non-`github.com` hosts. Give operators with GitHub Enterprise on a private network the same explicit origin allowlist that `server/src/adapters/http/remote-fetch.ts:41-77` already provides. Apply the same wrapper in `company-portability.ts` and `skills-catalog.ts`.
-- **Applied:** No. The change alters behavior for operators importing from private-network GitHub Enterprise hosts, so it needs an allowlist decision.
+- **Applied:** Yes, on branch `security/skill-import-ssrf` (commit `3244165c5`), which stacks on this branch. `ghFetch` now sends every non-GitHub hop through `guardedRemoteHttpFetch`, keeps the platform `fetch` for GitHub's own hosts (`github.com`, `api.github.com`, `raw.githubusercontent.com`) but never lets it follow redirects, and follows redirects itself for up to five hops with the guard run again on each `Location`. One deliberate difference from the fix described above: it does not require `https:` for non-GitHub hosts. The address guard is what closes the SSRF, and requiring `https:` would break imports from plain-HTTP public hosts without adding protection against it. Private-network GitHub Enterprise or skill hosts are opted in with `PAPERCLIP_GITHUB_PRIVATE_ENDPOINT_ALLOWLIST` (exact origins; link-local stays denied), documented in `doc/DEVELOPING.md`. This changes behavior only for operators who import from a private-network host without listing it.
 
 ### M-01: Member role update does not bound the new role by the actor's rank
 
@@ -398,7 +398,7 @@ Ordered by severity. "Applied" means the fix is committed on `security/assessmen
 
 ## 5. Applied fixes
 
-All applied fixes are on branch `security/assessment-2026-10-20` in commit `1a20bc5a2`. Each is local, behavior-preserving for correctly configured deployments, and covered by a test or a direct verification.
+The first eight fixes are on branch `security/assessment-2026-10-20` in commit `1a20bc5a2`. Each is local, behavior-preserving for correctly configured deployments, and covered by a test or a direct verification. The H-03 fix is on branch `security/skill-import-ssrf` in commit `3244165c5`; it stacks on the first branch and is the only applied fix that changes behavior for an operator (see below).
 
 | Finding | Files | Change | Verification |
 |---|---|---|---|
@@ -410,6 +410,7 @@ All applied fixes are on branch `security/assessment-2026-10-20` in commit `1a20
 | L-21 | `.dockerignore` | Exclude `.env`, `.env.*`, `*.pem`; keep `.env.example` and `.env.*.example` | `node scripts/check-docker-deps-stage.mjs` passes |
 | I-01 | `server/src/board-claim.ts` | Length-checked `timingSafeEqual` for token and code | `board-claim.test.ts` passes |
 | I-02 | `server/src/secrets/local-encrypted-provider.ts` | `createDecipheriv(..., { authTagLength: 16 })` | Direct round-trip through `localEncryptedProvider.createSecret`/`resolveVersion`: decrypts normally; 8-byte tag rejected |
+| H-03 | `server/src/services/github-fetch.ts`, `server/src/__tests__/github-fetch.test.ts` (new), `doc/DEVELOPING.md` | Guard every non-GitHub hop; manual redirects with the guard re-run per hop; `PAPERCLIP_GITHUB_PRIVATE_ENDPOINT_ALLOWLIST` for private GitHub Enterprise hosts | 28 new tests (metadata, loopback, RFC 1918, hostname resolving to a private address, redirect to each of those, scheme change, redirect limit, allowlist) fail against the old helper and pass now. 32 related suites pass: 618 passed, 1 skipped. Typecheck passes |
 
 ## 6. Checks run and results
 
@@ -426,13 +427,14 @@ All applied fixes are on branch `security/assessment-2026-10-20` in commit `1a20
 | Secrets suites (after) | `secrets-service`, `agent-identity-master-key`, `secret-provider-registry`, `agent-instance-secrets` | 3 passed, 104 skipped (database-backed cases skip without embedded Postgres, see below) |
 | UI suite (before and after) | `vitest run src/pages/IssueDetail.test.tsx` | 157 passed both times |
 | Typecheck (after) | `pnpm --filter @paperclipai/server typecheck`, `pnpm --filter @paperclipai/ui typecheck` | Both pass (exit 0). The server step also runs `prepare:runner-vendor`, which compiles the Rust runner |
+| H-03 related suites (after) | `vitest run` on the 32 suites that import the helper's consumers: company skills (service, routes, import authz, policy, catalog, runtime), company portability, skills catalog, skill sources, GitHub skill source, commit details, external objects, project skill sources, runtime skills. Run as the non-root user `claude` so embedded Postgres can start | 32 files passed; 618 tests passed, 1 skipped |
 | Full Vitest suite (before) | `pnpm test:run` | **Not completed.** Stopped after 56 minutes at 119 of roughly 1,000 server suites (811 tests, 62 failed). Every failure was in a database-backed suite: embedded Postgres refuses to `initdb` as root in this container ("The files belonging to this database system will be owned by user postgres... must also own the server process"). Throughput was about two suites per minute, so a full run would take many hours |
 
 ## 7. Checks not performed and why
 
 | Check | Status | Reason |
 |---|---|---|
-| Full Vitest suite to completion, before and after | Not performed | Runtime of many hours at the observed throughput; database-backed suites cannot start embedded Postgres as root in this container. Targeted suites covering every changed file were run before and after instead |
+| Full Vitest suite to completion, before and after | Not performed | Runtime of many hours at the observed throughput; database-backed suites cannot start embedded Postgres as root in this container (running them as a non-root user works, as done for the H-03 suites). Targeted suites covering every changed file were run before and after instead |
 | Browser suites (`pnpm test:e2e`, `pnpm test:release-smoke`, storybook visual) | Not performed | Opt-in per `AGENTS.md`; no change touches them |
 | `pnpm build` and `pnpm -r typecheck` across all packages | Not performed | The server and UI packages, which contain every changed TypeScript file, were typechecked and pass. The full workspace build and the typecheck of the other packages were out of proportion to the size of the applied changes |
 | Dynamic testing against a running instance | Not performed | Out of scope by instruction; nothing was run against any deployed target |
@@ -445,8 +447,8 @@ All applied fixes are on branch `security/assessment-2026-10-20` in commit `1a20
 
 ### Now (this week)
 
-1. **Merge the assessment branch** after review: H-01, H-02, M-09 headers, L-10, L-18, L-21, I-01, I-02.
-2. **H-03 and M-07:** route `ghFetch` and the AI-connection provider `fetch` through `guardedRemoteHttpFetch`, with an operator allowlist for private GitHub Enterprise and gateway hosts.
+1. **Merge the assessment branch** after review: H-01, H-02, M-09 headers, L-10, L-18, L-21, I-01, I-02. Then merge `security/skill-import-ssrf` for H-03, and tell operators with private-network GitHub Enterprise hosts to set `PAPERCLIP_GITHUB_PRIVATE_ENDPOINT_ALLOWLIST` first.
+2. **M-07:** route the AI-connection provider `fetch` through `guardedRemoteHttpFetch`, with an operator allowlist for private gateway hosts. (H-03, the same fix for skill and company import, is done on `security/skill-import-ssrf`.)
 3. **M-13:** run `pnpm update --recursive --lockfile-only` on the `chore/refresh-lockfile` branch, then bump `svix` and `@tailwindcss/typography`; this clears every critical and high advisory.
 4. **M-08:** stop publishing Postgres from `docker/docker-compose.yml` and require `POSTGRES_PASSWORD`.
 5. **M-06 (documentation part):** document `PAPERCLIP_AUTH_DISABLE_SIGN_UP` in `doc/DOCKER.md`, both compose files, and the ECS template.
