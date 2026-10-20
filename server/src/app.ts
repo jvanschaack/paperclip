@@ -62,6 +62,7 @@ import { httpLogger, errorHandler } from "./middleware/index.js";
 import { skillAccessRequestContext } from "./services/skill-access.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { baselineSecurityHeaders } from "./middleware/security-headers.js";
 import {
   privateHostnameGuard,
   resolvePrivateHostnameAllowSet,
@@ -550,6 +551,7 @@ export async function createApp(
 ) {
   const app = express();
   app.use(idleAdmissionMiddleware);
+  app.use(baselineSecurityHeaders());
   const staticUi = express.Router();
   app.locals.paperclipDb = db;
   const isWarmStandby = opts.cloudWarmStandby ?? (() => false);

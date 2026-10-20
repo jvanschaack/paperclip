@@ -5,10 +5,33 @@ function isLoopbackHostname(hostname: string): boolean {
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
+/**
+ * Resolve the request host without letting a direct client promote its own
+ * X-Forwarded-Host value past the allowlist. Express compiles the operator's
+ * TRUST_PROXY setting into `trust proxy fn`; only a trusted immediate peer
+ * may supply the forwarded host. This mirrors `requestHost()` in
+ * board-mutation-guard.ts.
+ */
+function requestHost(req: Request): string | undefined {
+  const host = req.header("host")?.trim();
+  const remoteAddress = req.socket?.remoteAddress;
+  const trustProxy = req.app?.get("trust proxy fn") as
+    | ((address: string, hop: number) => boolean)
+    | undefined;
+
+  if (
+    remoteAddress
+    && typeof trustProxy === "function"
+    && trustProxy(remoteAddress, 0)
+  ) {
+    return req.header("x-forwarded-host")?.split(",")[0]?.trim() || host;
+  }
+
+  return host;
+}
+
 function extractHostname(req: Request): string | null {
-  const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
-  const hostHeader = req.header("host")?.trim();
-  const raw = forwardedHost || hostHeader;
+  const raw = requestHost(req);
   if (!raw) return null;
 
   try {

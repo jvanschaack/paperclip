@@ -5923,7 +5923,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
   const handleChatImageClick = useCallback(
     (src: string) => {
-      if (!openIssueGallery(src)) window.open(src, "_blank");
+      if (!openIssueGallery(src)) window.open(src, "_blank", "noopener,noreferrer");
     },
     [openIssueGallery],
   );

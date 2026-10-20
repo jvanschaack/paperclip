@@ -1,5 +1,12 @@
 .git
 .github
+# Local secret files must never land in an image layer (`COPY . .`). The
+# committed `.env.example` files stay in the context.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
 .paperclip
 .pnpm-store
 node_modules
