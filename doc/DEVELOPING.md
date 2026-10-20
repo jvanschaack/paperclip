@@ -2508,6 +2508,30 @@ credentials, query strings, fragments, and wildcards are ignored. Matching is
 by exact normalized origin, so allowing one port does not allow another.
 Link-local destinations remain denied even when explicitly listed.
 
+## Skill and Company Import Source Endpoints
+
+Importing a skill or a company from a URL (`POST /api/companies/:companyId/skills/import`,
+company import from GitHub, and the skills catalog) fetches the source from the
+Paperclip server. These fetches use the same DNS-pinning guard as remote
+connections. They reject loopback, RFC1918/private, and link-local or
+cloud-metadata destinations, and they follow redirects one hop at a time with
+the guard run again on every `Location`, up to five hops. GitHub's own hosts
+(`github.com`, `api.github.com`, `raw.githubusercontent.com`) are fetched
+directly.
+
+Server owners who run GitHub Enterprise, or host skill files, on a private
+network can opt those origins in with a comma-separated list of exact origins:
+
+```sh
+PAPERCLIP_GITHUB_PRIVATE_ENDPOINT_ALLOWLIST=https://ghe.internal.example,https://10.0.0.42:8443
+```
+
+Each entry must contain only a scheme, hostname, and optional port. Paths,
+credentials, query strings, and fragments make an entry invalid, and it is
+ignored. Matching is by exact normalized origin, so allowing one port does not
+allow another. Link-local destinations remain denied even when explicitly
+listed.
+
 ## Company Deletion Toggle
 
 Company deletion is intended as a dev/debug capability and can be disabled at runtime:
